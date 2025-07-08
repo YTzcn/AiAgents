@@ -357,6 +357,20 @@ async def get_product_reviews(url: str, export_csv: bool = False) -> Dict:
         
         # Tüm ürünleri toplamak için dizi
         all_products = []
+        # Benzersiz ürünleri takip etmek için set
+        unique_product_ids = set()
+        # Benzersiz yorumları takip etmek için set (CSV için)
+        unique_review_keys = set()
+
+        # Yorumları CSV'ye eklemeden önce tekrar kontrolü için fonksiyon
+        def filter_unique_reviews(reviews, product_info):
+            filtered = []
+            for review in reviews:
+                key = f"{product_info['contentId']}_{review.get('userFullName','')}_{review.get('comment','')}"
+                if key not in unique_review_keys:
+                    unique_review_keys.add(key)
+                    filtered.append(review)
+            return filtered
         
         # URL'den temel parametreleri çıkar
         parsed_url = urlparse(url)
@@ -402,12 +416,25 @@ async def get_product_reviews(url: str, export_csv: bool = False) -> Dict:
             
             print(f"✅ Sayfa {current_page}/{total_pages}: {len(products)} ürün bulundu")
             
-            # Ürünleri topla
-            all_products.extend(products)
+            # Ürünleri topla (tekrarı engelle)
+            for product in products:
+                content_id_match = re.search(r'-p-(\d+)', product.get("url", ""))
+                content_id = content_id_match.group(1) if content_id_match else None
+                if not content_id or content_id in unique_product_ids:
+                    continue  # Aynı ürün tekrar eklenmesin
+                unique_product_ids.add(content_id)
+                all_products.append(product)
 
             
             # Her ürün için yorumları toplama
-            for product in products:
+            processed_product_ids = set()
+            for product in all_products:
+                content_id_match = re.search(r'-p-(\d+)', product.get("url", ""))
+                content_id = content_id_match.group(1) if content_id_match else None
+                if not content_id or content_id in processed_product_ids:
+                    continue  # Aynı ürün tekrar işlenmesin
+                processed_product_ids.add(content_id)
+                
                 # Ürün bilgilerini çıkar
                 content_id_match = re.search(r'-p-(\d+)', product.get("url", ""))
                 content_id = content_id_match.group(1) if content_id_match else None
@@ -520,9 +547,11 @@ async def get_product_reviews(url: str, export_csv: bool = False) -> Dict:
                         
                         # Yorumları CSV dosyasına anlık olarak ekle
                         if export_csv:
-                            await append_reviews_to_csv(first_page_reviews, product_reviews["productInfo"], csv_filename, is_first_write)
-                            is_first_write = False  # İlk yazma işlemi tamamlandı
-                            print(f"✅ Sayfa 1 yorumları CSV dosyasına eklendi")
+                            filtered_reviews = filter_unique_reviews(first_page_reviews, product_reviews["productInfo"])
+                            if filtered_reviews:
+                                await append_reviews_to_csv(filtered_reviews, product_reviews["productInfo"], csv_filename, is_first_write)
+                                is_first_write = False  # İlk yazma işlemi tamamlandı
+                                print(f"✅ Sayfa 1 yorumları CSV dosyasına eklendi")
                         
                         print(f"Total pages: {review_total_pages}")
                         
@@ -553,9 +582,11 @@ async def get_product_reviews(url: str, export_csv: bool = False) -> Dict:
                                     
                                     # Yorumları CSV dosyasına anlık olarak ekle
                                     if export_csv:
-                                        await append_reviews_to_csv(page_reviews, product_reviews["productInfo"], csv_filename, is_first_write)
-                                        is_first_write = False  # İlk yazma işlemi tamamlandı
-                                        print(f"✅ Sayfa {page_num} yorumları CSV dosyasına eklendi")
+                                        filtered_reviews = filter_unique_reviews(page_reviews, product_reviews["productInfo"])
+                                        if filtered_reviews:
+                                            await append_reviews_to_csv(filtered_reviews, product_reviews["productInfo"], csv_filename, is_first_write)
+                                            is_first_write = False  # İlk yazma işlemi tamamlandı
+                                            print(f"✅ Sayfa {page_num} yorumları CSV dosyasına eklendi")
                                 else:
                                     print(f"Page data: {page_data}")
                                     print(f"❌ Sayfa {page_num}: Yorum içeriği bulunamadı")
@@ -619,9 +650,11 @@ async def get_product_reviews(url: str, export_csv: bool = False) -> Dict:
                     
                     # Yorumları CSV dosyasına anlık olarak ekle
                     if export_csv:
-                        await append_reviews_to_csv(first_page_reviews, product_reviews["productInfo"], csv_filename, is_first_write)
-                        is_first_write = False  # İlk yazma işlemi tamamlandı
-                        print(f"✅ Sayfa 1 yorumları CSV dosyasına eklendi")
+                        filtered_reviews = filter_unique_reviews(first_page_reviews, product_reviews["productInfo"])
+                        if filtered_reviews:
+                            await append_reviews_to_csv(filtered_reviews, product_reviews["productInfo"], csv_filename, is_first_write)
+                            is_first_write = False  # İlk yazma işlemi tamamlandı
+                            print(f"✅ Sayfa 1 yorumları CSV dosyasına eklendi")
                     
                     # Toplam sayfa sayısını al
                     print(f"Total pages: {review_total_pages}")
@@ -653,9 +686,11 @@ async def get_product_reviews(url: str, export_csv: bool = False) -> Dict:
                                 
                                 # Yorumları CSV dosyasına anlık olarak ekle
                                 if export_csv:
-                                    await append_reviews_to_csv(page_reviews, product_reviews["productInfo"], csv_filename, is_first_write)
-                                    is_first_write = False  # İlk yazma işlemi tamamlandı
-                                    print(f"✅ Sayfa {page_num} yorumları CSV dosyasına eklendi")
+                                    filtered_reviews = filter_unique_reviews(page_reviews, product_reviews["productInfo"])
+                                    if filtered_reviews:
+                                        await append_reviews_to_csv(filtered_reviews, product_reviews["productInfo"], csv_filename, is_first_write)
+                                        is_first_write = False  # İlk yazma işlemi tamamlandı
+                                        print(f"✅ Sayfa {page_num} yorumları CSV dosyasına eklendi")
                             else:
                                 print(f"Page data: {page_data}")
                                 print(f"❌ Sayfa {page_num}: Yorum içeriği bulunamadı")
