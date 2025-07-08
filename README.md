@@ -25,7 +25,7 @@ Bu proje, Trendyol'dan ürün yorumlarını ve arama sonuçlarını çekmek içi
 1. Projeyi klonlayın:
 ```bash
 git clone <repo-url>
-cd AwoxAiAgents
+cd AiAgents
 ```
 
 2. Sanal ortam oluşturun ve aktif edin:
