@@ -8,8 +8,8 @@ import pyjson5 # pyjson5'i kendi adıyla import et
 from bs4 import BeautifulSoup
 import html
 from playwright.async_api import async_playwright
-# import re # Artık regex kullanmıyoruz
 
+from app.core.config import settings
 from app.utils.hepsiburada_cookie_fetcher import fetch_hepsiburada_cookies_async
 
 # Logger'ı yapılandır
@@ -20,44 +20,52 @@ async def _make_api_request(url: str, headers: dict, params: Optional[Dict[str, 
     """
     Hepsiburada API'sine httpx ile istek atar ve 403 hatası durumunda yeniden dener.
     """
-    # logger.info(f"API isteği hazırlanıyor: URL={url}, Params={params}")
     for attempt in range(retries + 1):
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                # logger.info(f"API isteği gönderiliyor... (Deneme {attempt + 1}/{retries + 1})")
                 response = await client.get(url, headers=headers, params=params)
                 
-                # logger.info(f"Yanıt alındı: URL={response.url}, Status={response.status_code}")
-                # logger.debug(f"Yanıt içeriği (ilk 500 karakter): {response.text[:500]}")
-
-
                 if response.status_code == 403:
-                    logger.warning(f"403 Forbidden hatası alındı. Cookie'ler geçersiz olabilir.")
+                    logger.warning(f"403 Forbidden hatası alındı (URL: {url}). Cookie'ler geçersiz olabilir. Yeniden denenecek...")
                     if attempt < retries:
-                        logger.info("Yeni cookie'ler ile yeniden denenecek...")
-                        # Üst fonksiyonda yeni cookie'lerin alınmasını tetiklemek için hata fırlat
                         raise httpx.HTTPStatusError("403 Forbidden", request=response.request, response=response)
                     else:
                         logger.error("Maksimum deneme sayısına ulaşıldı, 403 hatası devam ediyor.")
-                        response.raise_for_status() # Son denemede hatayı fırlat
+                        response.raise_for_status()
 
-                response.raise_for_status() # Diğer HTTP hataları için hata fırlat
+                response.raise_for_status()
                 return response.json()
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 403 and attempt < retries:
-                logger.warning(f"403 hatası yakalandı, {2} saniye sonra yeniden denenecek.")
-                await asyncio.sleep(2)
-                # Yeni cookie'ler üst fonksiyonda alınacağı için döngüye devam et
+                await asyncio.sleep(settings.HEPSIBURADA_API_MIN_WAIT_TIME)
                 continue
             else:
                 logger.error(f"API isteği başarısız oldu: URL={url}, Hata={e}")
-                return {} # Hata durumunda boş dict dön
+                return {}
         except httpx.RequestError as e:
             logger.error(f"İstek sırasında kritik bir hata oluştu: URL={url}, Hata={e}")
-            # Bu tür hatalar (DNS vb.) genellikle yeniden denemeye değmez.
-            return {} # Hata durumunda boş dict dön
+            return {}
     return {}
+
+
+def _get_default_headers(cookie_string: str, user_agent: str, referer: str = settings.HEPSIBURADA_BASE_URL + "/") -> dict:
+    """Creates a default dictionary of headers for Hepsiburada API requests."""
+    return {
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'tr,en;q=0.9',
+        'origin': settings.HEPSIBURADA_BASE_URL,
+        'referer': referer,
+        'sec-ch-ua': '"Not)A;Brand";v="8", "Chromium";v="138", "Microsoft Edge";v="138"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"macOS"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-site',
+        'user-agent': user_agent,
+        'x-client-id': settings.HEPSIBURADA_API_CLIENT_ID,
+        'cookie': cookie_string
+    }
 
 
 async def fetch_products_from_search(url: str) -> Dict[str, Any]:
@@ -65,7 +73,7 @@ async def fetch_products_from_search(url: str) -> Dict[str, Any]:
     Verilen Hepsiburada arama URL'sinden ürünleri çeker.
     Her çağrıda yeni cookie'ler alarak Akamai korumasını aşmayı hedefler.
     """
-    logger.info(f"Ürünler çekiliyor: {url}")
+    logger.info(f"Hepsiburada arama sonuçları çekiliyor: {url}")
     max_retries = 2
     for attempt in range(max_retries + 1): # +1 ile toplam deneme sayısı doğru olur
         try:
@@ -75,28 +83,14 @@ async def fetch_products_from_search(url: str) -> Dict[str, Any]:
                 return {}
 
             cookie_string = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
-            headers = {
-                'accept': 'application/json, text/plain, */*',
-                'accept-language': 'tr,en;q=0.9',
-                'origin': 'https://www.hepsiburada.com',
-                'referer': 'https://www.hepsiburada.com/',
-                'sec-ch-ua': '"Not)A;Brand";v="8", "Chromium";v="138", "Microsoft Edge";v="138"',
-                'sec-ch-ua-mobile': '?0',
-                'sec-ch-ua-platform': '"macOS"',
-                'sec-fetch-dest': 'empty',
-                'sec-fetch-mode': 'cors',
-                'sec-fetch-site': 'same-site',
-                'user-agent': user_agent,
-                'x-client-id': 'MoriaDesktop',
-                'cookie': cookie_string
-            }
+            headers = _get_default_headers(cookie_string, user_agent)
 
             parsed_frontend_url = urlparse(url)
             query_params = parse_qs(parsed_frontend_url.query)
 
             api_params = {
                 'pageType': 'Search',
-                'size': 36,
+                'size': settings.HEPSIBURADA_SEARCH_PAGE_SIZE,
                 'page': query_params.get('sayfa', [1])[0]
             }
             
@@ -105,15 +99,15 @@ async def fetch_products_from_search(url: str) -> Dict[str, Any]:
                 raise ValueError("Arama sorgusu 'q' URL'de bulunamadı.")
             api_params['q'] = search_query[0]
 
-            api_base_url = "https://blackgate.hepsiburada.com/moriaapi/api/product"
+            api_base_url = settings.HEPSIBURADA_SEARCH_API_URL
             
             # Doğrudan _make_api_request'i çağır ve sonucu dön
             return await _make_api_request(api_base_url, headers=headers, params=api_params, retries=1)
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 403 and attempt < max_retries:
-                logger.warning(f"Ürün arama için 403 hatası. Tekrar denenecek... (Deneme {attempt + 1}/{max_retries})")
-                await asyncio.sleep(3)
+                # 403 hatası zaten _make_api_request içinde loglandı, burada tekrar loglamaya gerek yok.
+                await asyncio.sleep(settings.HEPSIBURADA_API_MAX_WAIT_TIME)
                 continue # Döngünün başına dönerek yeni cookie almayı tetikle
             else:
                 logger.error(f"Ürün arama işlemi {e.response.status_code} hatasıyla son denemede de başarısız oldu.")
@@ -127,7 +121,8 @@ async def fetch_product_reviews(sku: str, page: int = 0, size: int = 100) -> Dic
     Belirli bir ürün (SKU) için yorumları çeker.
     Yeni 'user-content-gw-hermes' endpoint'ini kullanır.
     """
-    logger.info(f"'{sku}' için {page}. sayfa yorumları çekiliyor...")
+    # Bu log çok sık çağrıldığı için DEBUG seviyesine düşürülebilir veya kaldırılabilir. Şimdilik kaldırıyorum.
+    # logger.info(f"'{sku}' için {page}. sayfa yorumları çekiliyor...") 
     max_retries = 2
     for attempt in range(max_retries + 1):
         try:
@@ -137,25 +132,15 @@ async def fetch_product_reviews(sku: str, page: int = 0, size: int = 100) -> Dic
                 return {}
 
             cookie_string = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
-            headers = {
-                'accept': 'application/json, text/plain, */*',
-                'accept-language': 'tr,en;q=0.9,en-GB;q=0.8,en-US;q=0.7',
-                'cache-control': 'no-cache',
-                'origin': 'https://www.hepsiburada.com',
-                'pragma': 'no-cache',
-                'priority': 'u=1, i',
-                'referer': f'https://www.hepsiburada.com/product-p-{sku}-yorumlari', # Daha spesifik referer
-                'sec-ch-ua': '"Not)A;Brand";v="8", "Chromium";v="138", "Microsoft Edge";v="138"',
-                'sec-ch-ua-mobile': '?0',
-                'sec-ch-ua-platform': '"macOS"',
-                'sec-fetch-dest': 'empty',
-                'sec-fetch-mode': 'cors',
-                'sec-fetch-site': 'same-site',
-                'user-agent': user_agent,
-                'cookie': cookie_string
-            }
+            referer_url = f"{settings.HEPSIBURADA_BASE_URL}/product-p-{sku}-yorumlari"
+            headers = _get_default_headers(cookie_string, user_agent, referer=referer_url)
+            # Add specific headers for this request if any
+            headers['cache-control'] = 'no-cache'
+            headers['pragma'] = 'no-cache'
+            headers['priority'] = 'u=1, i'
 
-            api_url = "https://user-content-gw-hermes.hepsiburada.com/queryapi/v2/ApprovedUserContents"
+
+            api_url = settings.HEPSIBURADA_REVIEW_API_URL
             params = {
                 "sku": sku,
                 "from": page * size,
@@ -169,8 +154,8 @@ async def fetch_product_reviews(sku: str, page: int = 0, size: int = 100) -> Dic
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 403 and attempt < max_retries:
-                logger.warning(f"Yorumlar için 403 hatası ({sku}). Tekrar denenecek... (Deneme {attempt + 1}/{max_retries})")
-                await asyncio.sleep(3)
+                # 403 hatası zaten _make_api_request içinde loglandı.
+                await asyncio.sleep(settings.HEPSIBURADA_API_MAX_WAIT_TIME)
                 continue
             else:
                 logger.error(f"Yorum çekme işlemi ({sku}) {e.response.status_code} hatasıyla son denemede de başarısız oldu.")
@@ -185,10 +170,11 @@ async def fetch_product_features(product_url: str) -> Dict[str, Any]:
     Bu yöntem, sayfanın JavaScript ile oluşturulan içeriğini almayı garanti eder.
     Önce 'reduxStore' script'ini, bulunamazsa 'product-detail-app-initial-state' script'ini dener.
     """
-    logger.info(f"Ürün özellikleri çekiliyor: {product_url}")
+    # Bu log da çok sık çağrılıyor, şimdilik kaldırıyorum.
+    # logger.info(f"Ürün özellikleri çekiliyor: {product_url}")
 
-    if not product_url.startswith("https://www.hepsiburada.com"):
-        product_url = f"https://www.hepsiburada.com{product_url}"
+    if not product_url.startswith(settings.HEPSIBURADA_BASE_URL):
+        product_url = f"{settings.HEPSIBURADA_BASE_URL}{product_url}"
 
     page = None
     try:
@@ -200,13 +186,12 @@ async def fetch_product_features(product_url: str) -> Dict[str, Any]:
             return {}
 
         async with async_playwright() as p:
-            browser = await p.chromium.connect_over_cdp("http://localhost:9222")
+            browser = await p.chromium.connect_over_cdp(settings.PLAYWRIGHT_CDP_URL)
             context = browser.contexts[0]
             page = await context.new_page()
             
             await page.goto(product_url, wait_until="domcontentloaded", timeout=60000)
 
-            print(f"Sayfa yüklendi. Lazy-load içeriğini tetiklemek için kaydırma yapılıyor...")
             await page.evaluate("window.scrollBy(0, 1000)")
             
             # Verinin script etiketine yüklendiğinden emin olmak için akıllı bekleme.
@@ -218,10 +203,9 @@ async def fetch_product_features(product_url: str) -> Dict[str, Any]:
             }
             """
             try:
-                print("'reduxStore' script'inin veriyle dolması bekleniyor...")
                 await page.wait_for_function(js_condition, timeout=20000)
-            except Exception as e:
-                logger.warning(f"Akıllı bekleme başarısız oldu (timeout olabilir), yine de devam ediliyor... Hata: {e}")
+            except Exception:
+                logger.warning(f"Sayfa içeriği beklenenden yavaş yüklendi veya 'reduxStore' bulunamadı ({product_url}). Devam ediliyor...")
 
             html_content = await page.content()
             
@@ -281,7 +265,7 @@ async def fetch_product_features(product_url: str) -> Dict[str, Any]:
                             if 'name' in prop and 'property' in prop:
                                 features_dict[prop['name']] = prop['property']
                     
-                    logger.info(f"✅ {len(features_dict)} adet ürün özelliği '{source_log}' kaynağından bulundu.")
+                    logger.info(f"{len(features_dict)} adet ürün özelliği '{source_log}' kaynağından bulundu.")
                     return features_dict
 
             logger.warning("Özellikleri içeren script etiketi bulunamadı.")

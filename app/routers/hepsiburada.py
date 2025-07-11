@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Query, HTTPException
 from ..services.hepsiburada_service import get_hepsiburada_product_info_and_reviews
+from ..core.config import settings
 
 router = APIRouter(
     prefix="/hepsiburada",
@@ -18,10 +19,10 @@ async def get_product_info_and_reviews_endpoint(
     - **url**: Hepsiburada arama sayfası URL'si
     - **export_csv**: Sonuçları CSV dosyasına aktarmak için true/false
     """
-    if not url or not url.startswith("https://www.hepsiburada.com"):
+    if not url or not url.startswith(settings.HEPSIBURADA_BASE_URL):
         raise HTTPException(
             status_code=400, 
-            detail="Geçerli bir Hepsiburada URL'si gereklidir. Örn: https://www.hepsiburada.com/ara?q=some-product"
+            detail=f"Geçerli bir Hepsiburada URL'si gereklidir. Örn: {settings.HEPSIBURADA_BASE_URL}/ara?q=some-product"
         )
     
     try:

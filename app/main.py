@@ -10,6 +10,21 @@ import subprocess
 from fastapi.staticfiles import StaticFiles
 from .core.config import settings
 from typing import Dict, Any
+import logging
+from rich.logging import RichHandler
+
+# --- LOGGING CONFIGURATION ---
+logging.basicConfig(
+    level="INFO",
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(rich_tracebacks=True)]
+)
+# Uvicorn ve diğer kütüphanelerin log seviyesini yükselterek gürültüyü azalt
+logging.getLogger("uvicorn").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("playwright").setLevel(logging.WARNING)
+# -----------------------------
 
 # SSL uyarılarını bastır
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)

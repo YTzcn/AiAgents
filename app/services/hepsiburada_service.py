@@ -10,6 +10,8 @@ import random
 import logging
 import math
 
+from app.core.config import settings
+
 logger = logging.getLogger(__name__)
 
 async def get_hepsiburada_product_info_and_reviews(url: str, export_csv: bool = False) -> Dict[str, Any]:
@@ -21,7 +23,7 @@ async def get_hepsiburada_product_info_and_reviews(url: str, export_csv: bool = 
     try:
         all_products_from_search = []
         
-        logger.info("📄 Ürün listesi ve sayfa sayısı çekiliyor...")
+        logger.info("Hepsiburada ürün listesi ve sayfa sayısı çekiliyor...")
         first_page_result = await fetch_products_from_search(url)
 
         if not first_page_result or 'products' not in first_page_result:
@@ -31,9 +33,9 @@ async def get_hepsiburada_product_info_and_reviews(url: str, export_csv: bool = 
         all_products_from_search.extend(first_page_result.get('products', []))
         last_page = first_page_result.get('lastPage', 1)
         
-        logger.info(f"ℹ️ Toplam {last_page} sayfa bulundu.")
+        logger.info(f"Toplam {last_page} sayfa bulundu.")
 
-        if False and last_page > 1: # 1. SAYFA KISITLAMASI GERİ GETİRİLDİ
+        if last_page > 1: # 1. SAYFA KISITLAMASI KALDIRILDI
             parsed_url = urlparse(url)
             query_params = parse_qs(parsed_url.query)
 
@@ -53,12 +55,11 @@ async def get_hepsiburada_product_info_and_reviews(url: str, export_csv: bool = 
                     logger.warning(f"⚠️ Sayfa {page_num} için ürünler çekilemedi. Devam ediliyor...")
                 
                 # Sunucuyu yormamak için sayfalar arasında makul ve rastgele bir süre bekle
-                wait_time = random.uniform(2, 5)
-                # logger.info(f"   (Sayfalar arası bekleme: {wait_time:.2f} saniye)")
+                wait_time = random.uniform(settings.HEPSIBURADA_API_MIN_WAIT_TIME, settings.HEPSIBURADA_API_MAX_WAIT_TIME)
                 await asyncio.sleep(wait_time)
         
         product_count = len(all_products_from_search)
-        logger.info(f"✅ Toplam {product_count} ürün bulundu. İşlem başlatılıyor...")
+        logger.info(f"Toplam {product_count} ürün bulundu. Yorum ve detaylar çekilecek...")
 
         if not all_products_from_search:
             logger.info("Hiç ürün bulunamadı.")
@@ -66,10 +67,9 @@ async def get_hepsiburada_product_info_and_reviews(url: str, export_csv: bool = 
 
         # --- CSV EXPORT LOGIC ---
         if export_csv:
-            downloads_dir = "downloads"
-            os.makedirs(downloads_dir, exist_ok=True)
+            os.makedirs(settings.DOWNLOADS_DIR, exist_ok=True) # Dizin'in var olduğundan emin ol
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            file_path = os.path.join(downloads_dir, f"hepsiburada_reviews_{timestamp}.csv")
+            file_path = os.path.join(settings.DOWNLOADS_DIR, f"hepsiburada_reviews_{timestamp}.csv")
             
             headers = [
                 'product_name', 'sku', 'price', 'product_url', 'review_content', 'review_star', 
@@ -82,7 +82,7 @@ async def get_hepsiburada_product_info_and_reviews(url: str, export_csv: bool = 
                 writer.writeheader()
                 
                 for i, product in enumerate(all_products_from_search):
-                    logger.info(f"[{i+1}/{product_count}] Ürün işleniyor: {product.get('variantList', [{}])[0].get('sku')}")
+                    # logger.info(f"[{i+1}/{product_count}] Ürün işleniyor: {product.get('variantList', [{}])[0].get('sku')}")
                     sku = product.get('variantList', [{}])[0].get('sku')
                     if not sku:
                         continue
@@ -133,6 +133,7 @@ async def get_hepsiburada_product_info_and_reviews(url: str, export_csv: bool = 
                                 'product_features': json.dumps(processed_product.get('features', {}), ensure_ascii=False)
                             })
 
+            logger.info(f"Veriler başarıyla CSV dosyasına aktarıldı: {file_path}")
             return {"success": True, "message": f"Data successfully exported to {file_path}"}
 
         # --- JSON RESPONSE LOGIC ---
@@ -161,22 +162,19 @@ async def process_single_product(product: Dict[str, Any], sku: str) -> Optional[
         price = variant_info.get('listing', {}).get('priceInfo', {}).get('price')
         product_url_path = variant_info.get('url') # Arama sonucundan gelen ürün URL path'i
 
-        # logger.info(f"▶️ Ürün: '{product_name}' (SKU: {sku})")
-
         # Ürün özelliklerini, yorum olup olmamasından bağımsız olarak her zaman çek
         features = {}
         if product_url_path:
             # fetch_product_features fonksiyonu zaten başına domain ekliyor
             features = await fetch_product_features(product_url_path)
         else:
-            logger.warning(f"  - Ürün URL'si arama sonucunda bulunamadı, özellikler çekilemiyor.")
+            logger.warning(f"  - SKU {sku} için ürün URL'si arama sonucunda bulunamadı, özellikler çekilemiyor.")
 
 
         all_reviews = []
-        page_size = 100
+        page_size = settings.HEPSIBURADA_REVIEW_PAGE_SIZE
         
         # 1. İlk sayfayı çek ve toplam yorum sayısını öğren
-        # logger.info("  - Yorumların 1. sayfası çekiliyor...")
         first_page_response = await fetch_product_reviews(sku, page=0, size=page_size)
         
         total_reviews = 0
@@ -190,7 +188,7 @@ async def process_single_product(product: Dict[str, Any], sku: str) -> Optional[
                 "price": price, 
                 "reviews": [],
                 "features": features,
-                "product_url": f"https://www.hepsiburada.com/{product_url_path}" if product_url_path else ""
+                "product_url": f"{settings.HEPSIBURADA_BASE_URL}/{product_url_path}" if product_url_path else ""
             }
 
         # İlk sayfanın yorumlarını ve toplam yorum sayısını ayrıştır
@@ -207,22 +205,13 @@ async def process_single_product(product: Dict[str, Any], sku: str) -> Optional[
 
         # logger.info(f"  - Toplam {total_reviews} yorum bulundu. İlk sayfadan {len(all_reviews)} yorum alındı.")
 
-        # Yorumlar çekildikten sonra ürün özelliklerini çek - BU BLOK YUKARI TAŞINDI
-        # features = {}
-        # if all_reviews:
-        #     product_url = all_reviews[0].get('product', {}).get('url')
-        #     if product_url:
-        #         features = await fetch_product_features(product_url)
-
         # 2. Gerekliyse diğer sayfaları da çek
         if total_reviews > len(all_reviews):
             total_pages = math.ceil(total_reviews / page_size)
-            logger.info(f"  - {sku} için {total_pages} sayfa yorum çekilecek.")
+            # logger.info(f"  - {sku} için {total_pages} sayfa yorum çekilecek.")
             
             for page_num in range(1, int(total_pages)):
-                # logger.info(f"  - Yorumların {page_num + 1}. sayfası çekiliyor...")
-                
-                await asyncio.sleep(random.uniform(1, 3)) # API'ye nefes aldır
+                await asyncio.sleep(random.uniform(settings.HEPSIBURADA_API_MIN_WAIT_TIME, settings.HEPSIBURADA_API_MAX_WAIT_TIME)) # API'ye nefes aldır
                 
                 next_page_response = await fetch_product_reviews(sku, page=page_num, size=page_size)
                 
@@ -237,12 +226,11 @@ async def process_single_product(product: Dict[str, Any], sku: str) -> Optional[
                 
                 if new_reviews:
                     all_reviews.extend(new_reviews)
-                    # logger.info(f"    - {len(new_reviews)} yeni yorum eklendi. Toplam: {len(all_reviews)}")
                 else:
-                    logger.warning(f"    - Sayfa {page_num + 1} boş geldi, yorum çekme işlemi durduruluyor.")
+                    logger.warning(f"    - Sayfa {page_num + 1} boş geldi, {sku} için yorum çekme işlemi durduruluyor.")
                     break
 
-        logger.info(f"✅ SKU {sku} için toplam {len(all_reviews)} yorum işlendi.")
+        logger.info(f"SKU {sku} için toplam {len(all_reviews)} yorum işlendi.")
 
         product_full_url = ""
         if all_reviews:
@@ -250,7 +238,7 @@ async def process_single_product(product: Dict[str, Any], sku: str) -> Optional[
             product_full_url = all_reviews[0].get('product', {}).get('url')
         elif product_url_path:
             # Yorum yoksa, arama sonucundaki path'ten tam URL oluştur
-            product_full_url = f"https://www.hepsiburada.com/{product_url_path}"
+            product_full_url = f"{settings.HEPSIBURADA_BASE_URL}/{product_url_path}"
 
 
         return {
