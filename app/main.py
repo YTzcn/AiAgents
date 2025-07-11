@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-from .routers import trendyol
+from .routers import trendyol, hepsiburada
 import warnings
 import urllib3
 import asyncio
@@ -9,6 +9,7 @@ import os
 import subprocess
 from fastapi.staticfiles import StaticFiles
 from .core.config import settings
+from typing import Dict, Any
 
 # SSL uyarılarını bastır
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -60,6 +61,7 @@ async def install_playwright_browsers():
 
 # Routerları ekle
 app.include_router(trendyol.router)
+app.include_router(hepsiburada.router)
 
 @app.get("/")
 def read_root():
@@ -73,7 +75,7 @@ async def debug_info():
     import httpx
     import os
     
-    results = {
+    results: Dict[str, Any] = {
         "hostname": socket.gethostname(),
         "ip_address": socket.gethostbyname(socket.gethostname()),
         "current_directory": os.getcwd(),
